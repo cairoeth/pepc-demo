@@ -1,0 +1,966 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index c90fa32f..a3561863 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -190,7 +190,7 @@ dependencies = [
+  "derive_more",
+  "ethereum_ssz",
+  "getrandom 0.2.12",
+- "hex-literal",
++ "hex-literal 0.4.1",
+  "itoa",
+  "k256",
+  "keccak-asm",
+@@ -547,6 +547,7 @@ dependencies = [
+  "foundry-evm",
+  "futures",
+  "hash-db",
++ "hex-literal 0.3.4",
+  "hyper",
+  "itertools 0.11.0",
+  "k256",
+@@ -554,6 +555,7 @@ dependencies = [
+  "parking_lot",
+  "pretty_assertions",
+  "rand 0.8.5",
++ "rustc-hex",
+  "serde",
+  "serde_json",
+  "serde_repr",
+@@ -3947,6 +3949,12 @@ dependencies = [
+  "serde",
+ ]
+ 
++[[package]]
++name = "hex-literal"
++version = "0.3.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7ebdb29d2ea9ed0083cd8cece49bbd968021bd99b0849edb4a9a7ee0fdf6a4e0"
++
+ [[package]]
+ name = "hex-literal"
+ version = "0.4.1"
+diff --git a/crates/anvil/Cargo.toml b/crates/anvil/Cargo.toml
+index 21633df0..d604ee42 100644
+--- a/crates/anvil/Cargo.toml
++++ b/crates/anvil/Cargo.toml
+@@ -73,6 +73,8 @@ tempfile = "3"
+ itertools.workspace = true
+ rand = "0.8"
+ eyre.workspace = true
++hex-literal = "0.3.4"
++rustc-hex = "2.1.0"
+ 
+ # cli
+ clap = { version = "4", features = ["derive", "env", "wrap_help"], optional = true }
+@@ -85,7 +87,7 @@ clap_complete_fig = "4"
+ ethereum-forkid = "0.12"
+ 
+ [dev-dependencies]
+-ethers = { workspace = true, features = ["abigen"] }
++ethers = { workspace = true, features = ["abigen", "ws", "rustls"]}
+ ethers-core = { workspace = true, features = ["optimism"] }
+ ethers-solc = { workspace = true, features = ["project-util", "full"] }
+ pretty_assertions = "1.3.0"
+diff --git a/crates/anvil/src/anvil.rs b/crates/anvil/src/anvil.rs
+index c969c094..fc681bcd 100644
+--- a/crates/anvil/src/anvil.rs
++++ b/crates/anvil/src/anvil.rs
+@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
+                 &mut std::io::stdout(),
+             ),
+         }
+-        return Ok(())
++        return Ok(());
+     }
+ 
+     let _ = fdlimit::raise_fd_limit();
+diff --git a/crates/anvil/src/cmd.rs b/crates/anvil/src/cmd.rs
+index 9ddd5343..9b2a2bfe 100644
+--- a/crates/anvil/src/cmd.rs
++++ b/crates/anvil/src/cmd.rs
+@@ -572,7 +572,7 @@ impl Future for PeriodicStateDumper {
+     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+         let this = self.get_mut();
+         if this.dump_state.is_none() {
+-            return Poll::Pending
++            return Poll::Pending;
+         }
+ 
+         loop {
+@@ -583,7 +583,7 @@ impl Future for PeriodicStateDumper {
+                     }
+                     Poll::Pending => {
+                         this.in_progress_dump = Some(flush);
+-                        return Poll::Pending
++                        return Poll::Pending;
+                     }
+                 }
+             }
+@@ -593,7 +593,7 @@ impl Future for PeriodicStateDumper {
+                 let path = this.dump_state.clone().expect("exists; see above");
+                 this.in_progress_dump = Some(Box::pin(PeriodicStateDumper::dump_state(api, path)));
+             } else {
+-                break
++                break;
+             }
+         }
+ 
+@@ -623,7 +623,7 @@ impl StateFile {
+         }
+         let mut state = Self { path, state: None };
+         if !state.path.exists() {
+-            return Ok(state)
++            return Ok(state);
+         }
+ 
+         state.state = Some(SerializableState::load(&state.path).map_err(|err| err.to_string())?);
+@@ -658,14 +658,14 @@ impl FromStr for ForkUrl {
+     fn from_str(s: &str) -> Result<Self, Self::Err> {
+         if let Some((url, block)) = s.rsplit_once('@') {
+             if block == "latest" {
+-                return Ok(ForkUrl { url: url.to_string(), block: None })
++                return Ok(ForkUrl { url: url.to_string(), block: None });
+             }
+             // this will prevent false positives for auths `user:password@example.com`
+             if !block.is_empty() && !block.contains(':') && !block.contains('.') {
+                 let block: u64 = block
+                     .parse()
+                     .map_err(|_| format!("Failed to parse block number: `{block}`"))?;
+-                return Ok(ForkUrl { url: url.to_string(), block: Some(block) })
++                return Ok(ForkUrl { url: url.to_string(), block: Some(block) });
+             }
+         }
+         Ok(ForkUrl { url: s.to_string(), block: None })
+diff --git a/crates/anvil/src/eth/api.rs b/crates/anvil/src/eth/api.rs
+index cb6c9d5b..f5016b2e 100644
+--- a/crates/anvil/src/eth/api.rs
++++ b/crates/anvil/src/eth/api.rs
+@@ -329,7 +329,7 @@ impl EthApi {
+                 if time >= U256::from(u64::MAX) {
+                     return ResponseResult::Error(RpcError::invalid_params(
+                         "The timestamp is too big",
+-                    ))
++                    ));
+                 }
+                 let time = time.to::<u64>();
+                 self.evm_set_next_block_timestamp(time).to_rpc_result()
+@@ -338,7 +338,7 @@ impl EthApi {
+                 if timestamp >= U256::from(u64::MAX) {
+                     return ResponseResult::Error(RpcError::invalid_params(
+                         "The timestamp is too big",
+-                    ))
++                    ));
+                 }
+                 let time = timestamp.to::<u64>();
+                 self.evm_set_time(time).to_rpc_result()
+@@ -426,13 +426,13 @@ impl EthApi {
+                         false,
+                     )
+                     .unwrap();
+-                return build_typed_transaction(request, nil_signature)
++                return build_typed_transaction(request, nil_signature);
+             }
+             _ => {
+                 for signer in self.signers.iter() {
+                     if signer.accounts().contains(from) {
+                         let signature = signer.sign_transaction(request.clone(), from)?;
+-                        return build_typed_transaction(request, signature)
++                        return build_typed_transaction(request, signature);
+                     }
+                 }
+             }
+diff --git a/crates/anvil/src/eth/backend/cheats.rs b/crates/anvil/src/eth/backend/cheats.rs
+index 949ea10e..a2118364 100644
+--- a/crates/anvil/src/eth/backend/cheats.rs
++++ b/crates/anvil/src/eth/backend/cheats.rs
+@@ -31,7 +31,7 @@ impl CheatsManager {
+         // which does not check that list when auto impersonation is enabeld.
+         if state.impersonated_accounts.contains(&addr) {
+             // need to check if already impersonated, so we don't overwrite the code
+-            return true
++            return true;
+         }
+         state.impersonated_accounts.insert(addr)
+     }
+diff --git a/crates/anvil/src/eth/backend/executor.rs b/crates/anvil/src/eth/backend/executor.rs
+index d4ba6926..65c822c8 100644
+--- a/crates/anvil/src/eth/backend/executor.rs
++++ b/crates/anvil/src/eth/backend/executor.rs
+@@ -145,18 +145,18 @@ impl<'a, DB: Db + ?Sized, Validator: TransactionValidator> TransactionExecutor<'
+                 }
+                 TransactionExecutionOutcome::Exhausted(tx) => {
+                     trace!(target: "backend",  tx_gas_limit = %tx.pending_transaction.transaction.gas_limit(), ?tx,  "block gas limit exhausting, skipping transaction");
+-                    continue
++                    continue;
+                 }
+                 TransactionExecutionOutcome::Invalid(tx, _) => {
+                     trace!(target: "backend", ?tx,  "skipping invalid transaction");
+                     invalid.push(tx);
+-                    continue
++                    continue;
+                 }
+                 TransactionExecutionOutcome::DatabaseError(_, err) => {
+                     // Note: this is only possible in forking mode, if for example a rpc request
+                     // failed
+                     trace!(target: "backend", ?err,  "Failed to execute transaction due to database error");
+-                    continue
++                    continue;
+                 }
+             };
+             let receipt = tx.create_receipt();
+@@ -254,7 +254,7 @@ impl<'a, 'b, DB: Db + ?Sized, Validator: TransactionValidator> Iterator
+         // check that we comply with the block's gas limit
+         let max_gas = self.gas_used.saturating_add(U256::from(env.tx.gas_limit));
+         if max_gas > env.block.gas_limit {
+-            return Some(TransactionExecutionOutcome::Exhausted(transaction))
++            return Some(TransactionExecutionOutcome::Exhausted(transaction));
+         }
+ 
+         // validate before executing
+@@ -264,7 +264,7 @@ impl<'a, 'b, DB: Db + ?Sized, Validator: TransactionValidator> Iterator
+             &env,
+         ) {
+             warn!(target: "backend", "Skipping invalid tx execution [{:?}] {}", transaction.hash(), err);
+-            return Some(TransactionExecutionOutcome::Invalid(transaction, err))
++            return Some(TransactionExecutionOutcome::Invalid(transaction, err));
+         }
+ 
+         let nonce = account.nonce;
+diff --git a/crates/anvil/src/eth/backend/genesis.rs b/crates/anvil/src/eth/backend/genesis.rs
+index 523208ba..e4389668 100644
+--- a/crates/anvil/src/eth/backend/genesis.rs
++++ b/crates/anvil/src/eth/backend/genesis.rs
+@@ -100,14 +100,14 @@ impl<'a> DatabaseRef for AtGenesisStateDb<'a> {
+     type Error = DatabaseError;
+     fn basic_ref(&self, address: Address) -> DatabaseResult<Option<AccountInfo>> {
+         if let Some(acc) = self.accounts.get(&(address)).cloned() {
+-            return Ok(Some(acc))
++            return Ok(Some(acc));
+         }
+         self.db.basic_ref(address)
+     }
+ 
+     fn code_by_hash_ref(&self, code_hash: B256) -> DatabaseResult<Bytecode> {
+         if let Some((_, acc)) = self.accounts.iter().find(|(_, acc)| acc.code_hash == code_hash) {
+-            return Ok(acc.code.clone().unwrap_or_default())
++            return Ok(acc.code.clone().unwrap_or_default());
+         }
+         self.db.code_by_hash_ref(code_hash)
+     }
+@@ -117,7 +117,7 @@ impl<'a> DatabaseRef for AtGenesisStateDb<'a> {
+             self.genesis.as_ref().and_then(|genesis| genesis.alloc.accounts.get(&(address)))
+         {
+             let value = acc.storage.get(&B256::from(index)).copied().unwrap_or_default();
+-            return Ok(U256::from_be_bytes(value.0))
++            return Ok(U256::from_be_bytes(value.0));
+         }
+         self.db.storage_ref(address, index)
+     }
+diff --git a/crates/anvil/src/eth/backend/mem/mod.rs b/crates/anvil/src/eth/backend/mem/mod.rs
+index f95b6b96..413fd8d0 100644
+--- a/crates/anvil/src/eth/backend/mem/mod.rs
++++ b/crates/anvil/src/eth/backend/mem/mod.rs
+@@ -594,7 +594,7 @@ impl Backend {
+     /// Returns an error if op-stack deposits are not active
+     pub fn ensure_op_deposits_active(&self) -> Result<(), BlockchainError> {
+         if self.is_optimism() {
+-            return Ok(())
++            return Ok(());
+         }
+         Err(BlockchainError::DepositTransactionUnsupported)
+     }
+@@ -946,7 +946,7 @@ impl Backend {
+             storage.blocks.insert(block_hash, block);
+             storage.hashes.insert(block_number, block_hash);
+ 
+-            node_info!("");
++            // node_info!("");
+             // insert all transactions
+             for (info, receipt) in transactions.into_iter().zip(receipts) {
+                 // log some tx info
+@@ -1848,7 +1848,7 @@ impl Backend {
+         }
+ 
+         if let Some(fork) = self.get_fork() {
+-            return Ok(fork.trace_transaction(hash).await?)
++            return Ok(fork.trace_transaction(hash).await?);
+         }
+ 
+         Ok(vec![])
+@@ -1895,7 +1895,7 @@ impl Backend {
+             return fork
+                 .debug_trace_transaction(hash, opts)
+                 .await
+-                .map_err(|_| BlockchainError::DataUnavailable)
++                .map_err(|_| BlockchainError::DataUnavailable);
+         }
+ 
+         Ok(GethTrace::Default(Default::default()))
+@@ -1921,7 +1921,10 @@ impl Backend {
+ 
+         if let Some(fork) = self.get_fork() {
+             if fork.predates_fork(number) {
+-                return fork.trace_block(number).await.map_err(|_| BlockchainError::DataUnavailable)
++                return fork
++                    .trace_block(number)
++                    .await
++                    .map_err(|_| BlockchainError::DataUnavailable);
+             }
+         }
+ 
+@@ -2176,7 +2179,10 @@ impl Backend {
+         }
+ 
+         if let Some(fork) = self.get_fork() {
+-            return fork.transaction_by_hash(hash).await.map_err(BlockchainError::AlloyForkProvider)
++            return fork
++                .transaction_by_hash(hash)
++                .await
++                .map_err(BlockchainError::AlloyForkProvider);
+         }
+ 
+         Ok(None)
+@@ -2354,8 +2360,8 @@ impl TransactionValidator for Backend {
+             if chain_id.to::<u64>() != tx_chain_id {
+                 if let Some(legacy) = tx.as_legacy() {
+                     // <https://github.com/ethereum/EIPs/blob/master/EIPS/eip-155.md>
+-                    if env.cfg.spec_id >= SpecId::SPURIOUS_DRAGON &&
+-                        !meets_eip155(chain_id.to::<u64>(), legacy.signature().v())
++                    if env.cfg.spec_id >= SpecId::SPURIOUS_DRAGON
++                        && !meets_eip155(chain_id.to::<u64>(), legacy.signature().v())
+                     {
+                         warn!(target: "backend", ?chain_id, ?tx_chain_id, "incompatible EIP155-based V");
+                         return Err(InvalidTransactionError::IncompatibleEIP155);
+diff --git a/crates/anvil/src/eth/backend/mem/storage.rs b/crates/anvil/src/eth/backend/mem/storage.rs
+index b84a34dc..bc2dd25e 100644
+--- a/crates/anvil/src/eth/backend/mem/storage.rs
++++ b/crates/anvil/src/eth/backend/mem/storage.rs
+@@ -164,7 +164,7 @@ impl InMemoryBlockStates {
+             if let Some(state) = self.on_disk_states.get_mut(hash) {
+                 if let Some(cached) = self.disk_cache.read(*hash) {
+                     state.init_from_snapshot(cached);
+-                    return Some(state)
++                    return Some(state);
+                 }
+             }
+             None
+diff --git a/crates/anvil/src/eth/backend/time.rs b/crates/anvil/src/eth/backend/time.rs
+index f51ff93f..6fb57b06 100644
+--- a/crates/anvil/src/eth/backend/time.rs
++++ b/crates/anvil/src/eth/backend/time.rs
+@@ -78,7 +78,7 @@ impl TimeManager {
+         if timestamp <= *self.last_timestamp.read() {
+             return Err(BlockchainError::TimestampError(format!(
+                 "{timestamp} is lower than or equal to previous block's timestamp"
+-            )))
++            )));
+         }
+         self.next_exact_timestamp.write().replace(timestamp);
+         Ok(())
+diff --git a/crates/anvil/src/eth/fees.rs b/crates/anvil/src/eth/fees.rs
+index ef597331..36e4a21c 100644
+--- a/crates/anvil/src/eth/fees.rs
++++ b/crates/anvil/src/eth/fees.rs
+@@ -126,7 +126,7 @@ impl FeeManager {
+         // It means it was set by the user deliberately and therefore we treat it as a constant.
+         // Therefore, we skip the base fee calculation altogether and we return 0.
+         if self.base_fee().is_zero() {
+-            return 0
++            return 0;
+         }
+         calculate_next_block_base_fee(
+             gas_used.to::<u64>(),
+@@ -141,22 +141,22 @@ pub fn calculate_next_block_base_fee(gas_used: u64, gas_limit: u64, base_fee: u6
+     let gas_target = gas_limit / EIP1559_ELASTICITY_MULTIPLIER;
+ 
+     if gas_used == gas_target {
+-        return base_fee
++        return base_fee;
+     }
+     if gas_used > gas_target {
+         let gas_used_delta = gas_used - gas_target;
+         let base_fee_delta = std::cmp::max(
+             1,
+-            base_fee as u128 * gas_used_delta as u128 /
+-                gas_target as u128 /
+-                BASE_FEE_CHANGE_DENOMINATOR as u128,
++            base_fee as u128 * gas_used_delta as u128
++                / gas_target as u128
++                / BASE_FEE_CHANGE_DENOMINATOR as u128,
+         );
+         base_fee + (base_fee_delta as u64)
+     } else {
+         let gas_used_delta = gas_target - gas_used;
+-        let base_fee_per_gas_delta = base_fee as u128 * gas_used_delta as u128 /
+-            gas_target as u128 /
+-            BASE_FEE_CHANGE_DENOMINATOR as u128;
++        let base_fee_per_gas_delta = base_fee as u128 * gas_used_delta as u128
++            / gas_target as u128
++            / BASE_FEE_CHANGE_DENOMINATOR as u128;
+ 
+         base_fee.saturating_sub(base_fee_per_gas_delta as u64)
+     }
+@@ -277,7 +277,7 @@ impl FeeHistoryService {
+                     for (gas_used, effective_reward) in transactions.iter().cloned() {
+                         sum_gas += gas_used;
+                         if target_gas <= sum_gas {
+-                            return Some(effective_reward)
++                            return Some(effective_reward);
+                         }
+                     }
+                     None
+@@ -392,7 +392,7 @@ impl FeeDetails {
+                 if let Some(max_priority) = max_priority {
+                     let max_fee = max_fee.unwrap_or_default();
+                     if max_priority > max_fee {
+-                        return Err(BlockchainError::InvalidFeeInput)
++                        return Err(BlockchainError::InvalidFeeInput);
+                     }
+                 }
+                 Ok(FeeDetails {
+diff --git a/crates/anvil/src/eth/miner.rs b/crates/anvil/src/eth/miner.rs
+index 2199a506..414b1d1d 100644
+--- a/crates/anvil/src/eth/miner.rs
++++ b/crates/anvil/src/eth/miner.rs
+@@ -163,7 +163,7 @@ impl FixedBlockTimeMiner {
+     fn poll(&mut self, pool: &Arc<Pool>, cx: &mut Context<'_>) -> Poll<Vec<Arc<PoolTransaction>>> {
+         if self.interval.poll_tick(cx).is_ready() {
+             // drain the pool
+-            return Poll::Ready(pool.ready_transactions().collect())
++            return Poll::Ready(pool.ready_transactions().collect());
+         }
+         Poll::Pending
+     }
+@@ -195,7 +195,7 @@ impl ReadyTransactionMiner {
+         }
+ 
+         if self.has_pending_txs == Some(false) {
+-            return Poll::Pending
++            return Poll::Pending;
+         }
+ 
+         let transactions =
+@@ -205,7 +205,7 @@ impl ReadyTransactionMiner {
+         self.has_pending_txs = Some(transactions.len() >= self.max_transactions);
+ 
+         if transactions.is_empty() {
+-            return Poll::Pending
++            return Poll::Pending;
+         }
+ 
+         Poll::Ready(transactions)
+diff --git a/crates/anvil/src/eth/otterscan/api.rs b/crates/anvil/src/eth/otterscan/api.rs
+index ac092f36..ce09bf67 100644
+--- a/crates/anvil/src/eth/otterscan/api.rs
++++ b/crates/anvil/src/eth/otterscan/api.rs
+@@ -69,7 +69,7 @@ impl EthApi {
+ 
+         if let Some(receipt) = self.backend.mined_transaction_receipt(hash) {
+             if receipt.inner.status_code == Some(U64::ZERO) {
+-                return Ok(receipt.out.map(|b| b.0.into()))
++                return Ok(receipt.out.map(|b| b.0.into()));
+             }
+         }
+ 
+@@ -164,7 +164,7 @@ impl EthApi {
+                 res.extend(hashes);
+ 
+                 if res.len() >= page_size {
+-                    break
++                    break;
+                 }
+             }
+         }
+@@ -223,7 +223,7 @@ impl EthApi {
+                 res.extend(hashes);
+ 
+                 if res.len() >= page_size {
+-                    break
++                    break;
+                 }
+             }
+         }
+@@ -248,7 +248,7 @@ impl EthApi {
+             if let Some(txs) = self.backend.mined_transactions_by_block_number(n.into()).await {
+                 for tx in txs {
+                     if U256::from(tx.nonce) == nonce && tx.from == address {
+-                        return Ok(Some(tx))
++                        return Ok(Some(tx));
+                     }
+                 }
+             }
+diff --git a/crates/anvil/src/eth/pool/mod.rs b/crates/anvil/src/eth/pool/mod.rs
+index 8848a954..3a5adc7d 100644
+--- a/crates/anvil/src/eth/pool/mod.rs
++++ b/crates/anvil/src/eth/pool/mod.rs
+@@ -211,7 +211,7 @@ impl PoolInner {
+     /// Returns `None` if the transaction does not exist in the pool
+     fn get_transaction(&self, hash: TxHash) -> Option<PendingTransaction> {
+         if let Some(pending) = self.pending_transactions.get(&hash) {
+-            return Some(pending.transaction.pending_transaction.clone())
++            return Some(pending.transaction.pending_transaction.clone());
+         }
+         Some(
+             self.ready_transactions.get(&hash)?.transaction.transaction.pending_transaction.clone(),
+@@ -226,7 +226,7 @@ impl PoolInner {
+     fn add_transaction(&mut self, tx: PoolTransaction) -> Result<AddedTransaction, PoolError> {
+         if self.contains(&tx.hash()) {
+             warn!(target: "txpool", "[{:?}] Already imported", tx.hash());
+-            return Err(PoolError::AlreadyImported(Box::new(tx)))
++            return Err(PoolError::AlreadyImported(Box::new(tx)));
+         }
+ 
+         let tx = PendingPoolTransaction::new(tx, self.ready_transactions.provided_markers());
+@@ -236,7 +236,7 @@ impl PoolInner {
+         if !tx.is_ready() {
+             let hash = tx.transaction.hash();
+             self.pending_transactions.add_transaction(tx)?;
+-            return Ok(AddedTransaction::Pending { hash })
++            return Ok(AddedTransaction::Pending { hash });
+         }
+         self.add_ready_transaction(tx)
+     }
+@@ -276,7 +276,7 @@ impl PoolInner {
+                     if is_new_tx {
+                         debug!(target: "txpool", "[{:?}] Failed to add tx: {:?}", current_hash,
+         err);
+-                        return Err(err)
++                        return Err(err);
+                     } else {
+                         ready.discarded.push(current_hash);
+                     }
+@@ -290,7 +290,7 @@ impl PoolInner {
+         // the pending queue
+         if ready.removed.iter().any(|tx| *tx.hash() == hash) {
+             self.ready_transactions.clear_transactions(&ready.promoted);
+-            return Err(PoolError::CyclicTransaction)
++            return Err(PoolError::CyclicTransaction);
+         }
+ 
+         Ok(AddedTransaction::Ready(ready))
+@@ -331,7 +331,7 @@ impl PoolInner {
+     pub fn remove_invalid(&mut self, tx_hashes: Vec<TxHash>) -> Vec<Arc<PoolTransaction>> {
+         // early exit in case there is no invalid transactions.
+         if tx_hashes.is_empty() {
+-            return vec![]
++            return vec![];
+         }
+         trace!(target: "txpool", "Removing invalid transactions: {:?}", tx_hashes);
+ 
+diff --git a/crates/anvil/src/eth/pool/transactions.rs b/crates/anvil/src/eth/pool/transactions.rs
+index 312bde48..9527a66c 100644
+--- a/crates/anvil/src/eth/pool/transactions.rs
++++ b/crates/anvil/src/eth/pool/transactions.rs
+@@ -157,7 +157,7 @@ impl PendingTransactions {
+                 warn!(target: "txpool", "pending replacement transaction underpriced [{:?}]", tx.transaction.hash());
+                 return Err(PoolError::ReplacementUnderpriced(Box::new(
+                     tx.transaction.as_ref().clone(),
+-                )))
++                )));
+             }
+         }
+ 
+@@ -343,7 +343,7 @@ impl Iterator for TransactionsIterator {
+                 }
+             }
+ 
+-            return Some(best.transaction)
++            return Some(best.transaction);
+         }
+     }
+ }
+@@ -463,7 +463,7 @@ impl ReadyTransactions {
+ 
+         // early exit if we are not replacing anything.
+         if remove_hashes.is_empty() {
+-            return Ok((Vec::new(), Vec::new()))
++            return Ok((Vec::new(), Vec::new()));
+         }
+ 
+         // check if we're replacing the same transaction and if it can be replaced
+@@ -480,7 +480,7 @@ impl ReadyTransactions {
+                     // check if underpriced
+                     if tx.pending_transaction.transaction.gas_price() <= to_remove.gas_price() {
+                         warn!(target: "txpool", "ready replacement transaction underpriced [{:?}]", tx.hash());
+-                        return Err(PoolError::ReplacementUnderpriced(Box::new(tx.clone())))
++                        return Err(PoolError::ReplacementUnderpriced(Box::new(tx.clone())));
+                     } else {
+                         trace!(target: "txpool", "replacing ready transaction [{:?}] with higher gas price [{:?}]", to_remove.transaction.transaction.hash(), tx.hash());
+                     }
+diff --git a/crates/anvil/src/eth/util.rs b/crates/anvil/src/eth/util.rs
+index 5153178f..7e3a2564 100644
+--- a/crates/anvil/src/eth/util.rs
++++ b/crates/anvil/src/eth/util.rs
+@@ -56,26 +56,26 @@ impl<'a> fmt::Debug for HexDisplay<'a> {
+ 
+ pub fn to_precompile_id(spec_id: SpecId) -> revm::precompile::SpecId {
+     match spec_id {
+-        SpecId::FRONTIER |
+-        SpecId::FRONTIER_THAWING |
+-        SpecId::HOMESTEAD |
+-        SpecId::DAO_FORK |
+-        SpecId::TANGERINE |
+-        SpecId::SPURIOUS_DRAGON => revm::precompile::SpecId::HOMESTEAD,
++        SpecId::FRONTIER
++        | SpecId::FRONTIER_THAWING
++        | SpecId::HOMESTEAD
++        | SpecId::DAO_FORK
++        | SpecId::TANGERINE
++        | SpecId::SPURIOUS_DRAGON => revm::precompile::SpecId::HOMESTEAD,
+         SpecId::BYZANTIUM | SpecId::CONSTANTINOPLE | SpecId::PETERSBURG => {
+             revm::precompile::SpecId::BYZANTIUM
+         }
+         SpecId::ISTANBUL | SpecId::MUIR_GLACIER => revm::precompile::SpecId::ISTANBUL,
+-        SpecId::BERLIN |
+-        SpecId::LONDON |
+-        SpecId::ARROW_GLACIER |
+-        SpecId::GRAY_GLACIER |
+-        SpecId::MERGE |
+-        SpecId::SHANGHAI |
+-        SpecId::CANCUN |
+-        SpecId::BEDROCK |
+-        SpecId::REGOLITH |
+-        SpecId::CANYON |
+-        SpecId::LATEST => revm::precompile::SpecId::BERLIN,
++        SpecId::BERLIN
++        | SpecId::LONDON
++        | SpecId::ARROW_GLACIER
++        | SpecId::GRAY_GLACIER
++        | SpecId::MERGE
++        | SpecId::SHANGHAI
++        | SpecId::CANCUN
++        | SpecId::BEDROCK
++        | SpecId::REGOLITH
++        | SpecId::CANYON
++        | SpecId::LATEST => revm::precompile::SpecId::BERLIN,
+     }
+ }
+diff --git a/crates/anvil/src/filter.rs b/crates/anvil/src/filter.rs
+index 60dce6b6..3cf81bc5 100644
+--- a/crates/anvil/src/filter.rs
++++ b/crates/anvil/src/filter.rs
+@@ -54,7 +54,7 @@ impl Filters {
+                     .await
+                     .unwrap_or_else(|| ResponseResult::success(Vec::<()>::new()));
+                 *deadline = self.next_deadline();
+-                return resp
++                return resp;
+             }
+         }
+         warn!(target: "node::filter", "No filter found for {}", id);
+@@ -65,7 +65,7 @@ impl Filters {
+     pub async fn get_log_filter(&self, id: &str) -> Option<Filter> {
+         let filters = self.active_filters.lock().await;
+         if let Some((EthFilter::Logs(ref log), _)) = filters.get(id) {
+-            return log.filter.filter.clone()
++            return log.filter.filter.clone();
+         }
+         None
+     }
+@@ -94,7 +94,7 @@ impl Filters {
+         active_filters.retain(|id, (_, deadline)| {
+             if now > *deadline {
+                 trace!(target: "node::filter",?id, "Evicting stale filter");
+-                return false
++                return false;
+             }
+             true
+         });
+diff --git a/crates/anvil/src/genesis.rs b/crates/anvil/src/genesis.rs
+index 3525838a..c95bab59 100644
+--- a/crates/anvil/src/genesis.rs
++++ b/crates/anvil/src/genesis.rs
+@@ -242,7 +242,7 @@ pub mod secret_key {
+     {
+         if let Some(s) = Option::<Bytes>::deserialize(deserializer)? {
+             if s.is_empty() {
+-                return Ok(None)
++                return Ok(None);
+             }
+             SecretKey::from_bytes(s.as_ref().into())
+                 .map_err(de::Error::custom)
+diff --git a/crates/anvil/src/pubsub.rs b/crates/anvil/src/pubsub.rs
+index ce2f7e24..579705a3 100644
+--- a/crates/anvil/src/pubsub.rs
++++ b/crates/anvil/src/pubsub.rs
+@@ -165,10 +165,10 @@ pub fn filter_logs(
+         };
+         if params.filter.is_some() {
+             let block_number = block.header.number;
+-            if !params.filter_block_range(block_number) ||
+-                !params.filter_block_hash(block_hash) ||
+-                !params.filter_address(&log) ||
+-                !params.filter_topics(&log)
++            if !params.filter_block_range(block_number)
++                || !params.filter_block_hash(block_hash)
++                || !params.filter_address(&log)
++                || !params.filter_topics(&log)
+             {
+                 return false;
+             }
+diff --git a/crates/anvil/src/service.rs b/crates/anvil/src/service.rs
+index 18ee20d9..a9fc7ea6 100644
+--- a/crates/anvil/src/service.rs
++++ b/crates/anvil/src/service.rs
+@@ -3,6 +3,7 @@
+ use crate::{
+     eth::{
+         fees::FeeHistoryService,
++        macros::node_info,
+         miner::Miner,
+         pool::{transactions::PoolTransaction, Pool},
+     },
+@@ -10,7 +11,12 @@ use crate::{
+     mem::{storage::MinedBlockOutcome, Backend},
+     NodeResult,
+ };
++use ethers::abi::{self, Token};
++use ethers::prelude::*;
++use eyre::Result;
+ use futures::{FutureExt, Stream, StreamExt};
++use hex_literal::hex;
++use rustc_hex::FromHex;
+ use std::{
+     collections::VecDeque,
+     future::Future,
+@@ -82,7 +88,7 @@ impl Future for NodeService {
+                 pin.block_producer.queued.push_back(transactions);
+             } else {
+                 // no progress made
+-                break
++                break;
+             }
+         }
+ 
+@@ -132,8 +138,40 @@ impl Stream for BlockProducer {
+ 
+         if !pin.queued.is_empty() {
+             if let Some(backend) = pin.idle_backend.take() {
+-                let transactions = pin.queued.pop_front().expect("not empty; qed");
++                let mut transactions = pin.queued.pop_front().expect("not empty; qed");
++
++                let tx_copy = transactions.clone();
++
+                 pin.block_mining = Some(Box::pin(async move {
++                    let confirmed = tokio::task::spawn(async move {
++                        let status;
++                        match check_commitments(tx_copy).await {
++                            Ok(result) => {
++                                node_info!("");
++                                if result {
++                                    node_info!("    PEPC: commitments ✅");
++                                    status = true;
++                                } else {
++                                    node_info!("    PEPC: commitments not satisfied 🟠");
++                                    status = false;
++                                }
++                            }
++                            Err(_err) => {
++                                node_info!("");
++                                node_info!("    PEPC: not configured ❌");
++                                status = true;
++                            }
++                        };
++                        status
++                    })
++                    .await
++                    .unwrap();
++
++                    if !confirmed {
++                        // Move first transaction to next block
++                        transactions.remove(0);
++                    }
++
+                     trace!(target: "miner", "creating new block");
+                     let block = backend.mine_block(transactions).await;
+                     trace!(target: "miner", "created new block: {}", block.block_number);
+@@ -145,7 +183,7 @@ impl Stream for BlockProducer {
+         if let Some(mut mining) = pin.block_mining.take() {
+             if let Poll::Ready((outcome, backend)) = mining.poll_unpin(cx) {
+                 pin.idle_backend = Some(backend);
+-                return Poll::Ready(Some(outcome))
++                return Poll::Ready(Some(outcome));
+             } else {
+                 pin.block_mining = Some(mining)
+             }
+@@ -154,3 +192,79 @@ impl Stream for BlockProducer {
+         Poll::Pending
+     }
+ }
++
++///////////////////
++//// PEPC MODS ////
++///////////////////
++
++abigen!(Screener, "src/abi/IScreener.json");
++
++/// Return a Provider for the given URL
++pub fn get_http_provider() -> Result<Provider<Http>> {
++    let url = "http://127.0.0.1:8545";
++    Provider::<Http>::try_from(url).map_err(|_| eyre::eyre!("Invalid RPC URL"))
++}
++
++/// Construct the searcher wallet
++pub fn get_searcher_wallet() -> Result<LocalWallet> {
++    let private_key = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
++    private_key
++        .parse::<LocalWallet>()
++        .map_err(|e| eyre::eyre!("Failed to parse private key: {:?}", e))
++}
++
++/// Creates a client from a provider
++pub fn create_http_client(
++    p: Provider<Http>,
++    chain_id: u64,
++) -> Result<Arc<SignerMiddleware<Provider<Http>, LocalWallet>>> {
++    let wallet = get_searcher_wallet()?;
++    let client = SignerMiddleware::new(p, wallet.with_chain_id(chain_id));
++    Ok(Arc::new(client))
++}
++
++/// Construct the Screener contract
++pub fn get_screener_contract(
++    chain_id: u64,
++    address: H160,
++) -> Result<Screener<SignerMiddleware<Provider<Http>, LocalWallet>>> {
++    // Create a client
++    let provider = get_http_provider()?;
++    let client = create_http_client(provider, chain_id)?;
++
++    // Return the contract
++    Ok(Screener::new(address, client))
++}
++
++/// Check commitments for a list of txs
++// #[tokio::test(flavor = "multi_thread")]
++pub async fn check_commitments(transactions: Vec<Arc<PoolTransaction>>) -> Result<bool> {
++    let mut encoded = Vec::new();
++
++    for tx in transactions.into_iter() {
++        match tx.pending_transaction.transaction.to() {
++            Some(x) => {
++                let addy: &str = &x.to_string()[2..x.to_string().len()];
++                let value_test = Bytes(addy.from_hex().unwrap());
++                trace!(target: "pepc",  contract = addy,  "contract called");
++
++                encoded = abi::encode_packed(&[
++                    Token::Bytes(encoded.to_vec()),
++                    Token::Bytes(value_test.to_vec()),
++                ])?;
++            }
++            None => {}
++        }
++    }
++
++    let value = ethers::types::Bytes::from(encoded);
++
++    let screener: H160 = H160(hex!("0165878A594ca255338adfa4d48449f69242Eb8F"));
++    let account: H160 = H160(hex!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"));
++    let target: [u8; 32] = Default::default();
++    let contract = get_screener_contract(1, screener)?;
++    // println!("{:?}", contract.screen(account, target, value.clone()));
++    let correct = contract.screen(account, target, value).call().await?;
++    // println!("{}", correct);
++    Ok(correct)
++}
+diff --git a/crates/anvil/src/tasks/block_listener.rs b/crates/anvil/src/tasks/block_listener.rs
+index 0b938822..2b3e2cb5 100644
+--- a/crates/anvil/src/tasks/block_listener.rs
++++ b/crates/anvil/src/tasks/block_listener.rs
+@@ -38,7 +38,7 @@ where
+         let pin = self.get_mut();
+ 
+         if pin.on_shutdown.poll_unpin(cx).is_ready() {
+-            return Poll::Ready(())
++            return Poll::Ready(());
+         }
+ 
+         let mut block = None;
+@@ -46,7 +46,7 @@ where
+         while let Poll::Ready(maybe_block) = pin.stream.poll_next_unpin(cx) {
+             if maybe_block.is_none() {
+                 // stream complete
+-                return Poll::Ready(())
++                return Poll::Ready(());
+             }
+             block = maybe_block;
+         }
+diff --git a/crates/anvil/tests/it/proof/eip1186.rs b/crates/anvil/tests/it/proof/eip1186.rs
+index c83cdf4f..3bbc6b8b 100644
+--- a/crates/anvil/tests/it/proof/eip1186.rs
++++ b/crates/anvil/tests/it/proof/eip1186.rs
+@@ -75,7 +75,7 @@ where
+     L: TrieLayout,
+ {
+     if proof.is_empty() {
+-        return Err(VerifyError::IncompleteProof)
++        return Err(VerifyError::IncompleteProof);
+     }
+     let key = NibbleSlice::new(raw_key);
+     process_node::<L>(Some(root), &proof[0], key, expected_value, &proof[1..])
+@@ -93,13 +93,13 @@ where
+ {
+     if let Some(value) = expected_value {
+         if encoded_node == value {
+-            return Ok(())
++            return Ok(());
+         }
+     }
+     if let Some(expected) = expected_node_hash {
+         let calculated_node_hash = <L::Hash as Hasher>::hash(encoded_node);
+         if calculated_node_hash != *expected {
+-            return Err(VerifyError::HashMismatch(calculated_node_hash))
++            return Err(VerifyError::HashMismatch(calculated_node_hash));
+         }
+     }
+     let node = <L::Codec as NodeCodec>::decode(encoded_node).map_err(VerifyError::DecodeError)?;
+@@ -144,9 +144,9 @@ where
+     L: TrieLayout,
+ {
+     if key != nib && expected_value.is_none() {
+-        return Ok(())
++        return Ok(());
+     } else if key != nib {
+-        return Err(VerifyError::NonExistingValue(key))
++        return Err(VerifyError::NonExistingValue(key));
+     }
+     match_value::<L>(Some(data), key, expected_value, proof)
+ }
+@@ -161,9 +161,9 @@ where
+     L: TrieLayout,
+ {
+     if !key.starts_with(nib) && expected_value.is_none() {
+-        return Ok(())
++        return Ok(());
+     } else if !key.starts_with(nib) {
+-        return Err(VerifyError::NonExistingValue(key))
++        return Err(VerifyError::NonExistingValue(key));
+     }
+     key.advance(nib.len());
+ 
+@@ -191,9 +191,9 @@ where
+     L: TrieLayout,
+ {
+     if !key.starts_with(&nib) && expected_value.is_none() {
+-        return Ok(())
++        return Ok(());
+     } else if !key.starts_with(&nib) && expected_value.is_some() {
+-        return Err(VerifyError::NonExistingValue(key))
++        return Err(VerifyError::NonExistingValue(key));
+     }
+     key.advance(nib.len());
+ 
+diff --git a/crates/anvil/tests/it/transaction.rs b/crates/anvil/tests/it/transaction.rs
+index 4e793964..51ee68d0 100644
+--- a/crates/anvil/tests/it/transaction.rs
++++ b/crates/anvil/tests/it/transaction.rs
+@@ -839,7 +839,7 @@ async fn can_stream_pending_transactions() {
+                 let sent_txs = sent.iter().map(|tx| tx.transaction_hash).collect::<HashSet<_>>();
+                 assert_eq!(sent_txs, watch_received.iter().map(|tx| tx.hash).collect());
+                 assert_eq!(sent_txs, sub_received.iter().map(|tx| tx.hash).collect());
+-                break
++                break;
+             }
+         }
+     }
