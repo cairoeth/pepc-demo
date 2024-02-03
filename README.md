@@ -1,6 +1,6 @@
 ## 🥤 PEPC Middleware Demo
 
-Demo with two commitment examples, `Commitment1` and `Commitment2`. The former establishes a restriction that if a block contains a transaction to the Uniswap router, it must be placed first in the block (i.e. transaction index must be 0). The latter establishes a commitment that each transaction in a block must be pointing `to` different addresses.
+Demo with two commitment examples, `Commitment1` and `Commitment2`. The former establishes a restriction that if a block contains a transaction to the Uniswap router, it must be placed first in the block (i.e. transaction index must be 0). The latter establishes a commitment that each transaction in a block must be pointing `to` different addresses (i.e., different pools).
 
 For `Commitment1`, this project also contains a front-running bot built with [Artemis](https://github.com/paradigmxyz/artemis) that will try to front-run a user's Uniswap transaction. This is used as an example together with the middleware to showcase how MEV can be mitigated.
 
