@@ -11,12 +11,6 @@ contract Sandwich {
     // Authorized
     address internal immutable user;
 
-    // transfer(address,uint256)
-    bytes4 internal constant ERC20_TRANSFER_ID = 0xa9059cbb;
-
-    // swap(uint256,uint256,address,bytes)
-    bytes4 internal constant PAIR_SWAP_ID = 0x022c0d9f;
-
     // Contructor sets the only user
     receive() external payable {}
 
@@ -26,9 +20,9 @@ contract Sandwich {
 
     /// @notice Receive ERC20 token profits.
     /// @param token address of the token you're recovering
-    function recoverERC20(address token) external {
-        require(msg.sender == user, "shoo");
-        IERC20(token).safeTransfer(msg.sender, IERC20(token).balanceOf(address(this)));
+    function recoverERC20(IERC20 token) external {
+        require(msg.sender == user);
+        token.safeTransfer(msg.sender, token.balanceOf(address(this)));
     }
 
     /// @param token address of the token you're swapping

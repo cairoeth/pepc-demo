@@ -1,4 +1,4 @@
-## PEPC Middleware Demo
+## 🥤 PEPC Middleware Demo
 
 Demo with two commitment exampels, `Commitment1` and `Commitment2`. The former establishes a restriction that if a block contains a transaciton to the Uniswap router, it must be placed first in the block (i.e. transaction index must be 0). The latter establishes a commitment that each transaciton in a block must be pointing to different `to` addresses.
 
